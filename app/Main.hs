@@ -16,6 +16,9 @@ data LispVal = Atom String
              | Complex (Complex Float)
              | Bool Bool deriving Show
 
+spaces :: Parser ()
+spaces = skipMany1 space
+
 symbol :: Parser Char
 symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
@@ -84,7 +87,6 @@ parseComplex = do
         where toDouble (Float x) = x
               toDouble (Number x) = fromIntegral x
 
-
 parseFloat :: Parser LispVal
 parseFloat = do
     i <- many1 digit
@@ -93,11 +95,55 @@ parseFloat = do
     let fn = i ++ [p] ++ d
     return $ (Float . read) fn
 
+parseList :: Parser LispVal
+parseList = List <$> sepBy parseExpr spaces
+
+parseDottedList :: Parser LispVal
+parseDottedList = do
+    head <- endBy parseExpr spaces
+    tail <- char '.' >> spaces >> parseExpr
+    return $ DottedList head tail
+
+parseQuoted :: Parser LispVal
+parseQuoted = do
+    char '\''
+    x <- parseExpr
+    return $ List [Atom "quote", x]
+
+parseQuasiquoted :: Parser LispVal
+parseQuasiquoted = do
+    char '`'
+    x <- parseExpr
+    return $ List [Atom "quasiquote", x]
+
+parseUnquoted :: Parser LispVal
+parseUnquoted = do
+    char ','
+    x <- parseExpr
+    return $ List [Atom "unquote", x]
+
+parseUnquoteSplicing :: Parser LispVal
+parseUnquoteSplicing = do
+    string ",@"
+    x <- parseExpr
+    return $ List [Atom "unquote-splicing", x]
+
+parseQuotes :: Parser LispVal
+parseQuotes = try parseQuoted
+          <|> try parseQuasiquoted
+          <|> try parseUnquoted
+          <|> try parseUnquoteSplicing
+
 parseExpr :: Parser LispVal
-parseExpr = parseNumber
-    <|> parseChar
-    <|> parseString
-    <|> parseAtom
+parseExpr = try parseAtom
+    <|> try parseString
+    <|> try parseChar
+    <|> try parseQuotes
+    <|> try parseNumber
+    <|> do char '('
+           x <- try parseList <|> parseDottedList
+           char ')'
+           return x
 
 readExpr :: String -> String
 readExpr input = case parse parseExpr "lisp" input of
