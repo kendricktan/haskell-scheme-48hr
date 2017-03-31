@@ -11,6 +11,7 @@ data LispVal = Atom String
              | Number Integer
              | String String
              | Char Char
+             | Float Float
              | Bool Bool deriving Show
 
 symbol :: Parser Char
@@ -52,7 +53,10 @@ parseChar = do
     return $ Char (head x)
 
 parseNumber :: Parser LispVal
-parseNumber = parseHex <|> parseOctal <|> parseDecimal
+parseNumber = parseFloat
+          <|> parseHex
+          <|> parseOctal
+          <|> parseDecimal
 
 parseDecimal :: Parser LispVal
 parseDecimal = (Number . read) <$> many1 digit
@@ -66,6 +70,14 @@ parseHex :: Parser LispVal
 parseHex = do
     char 'x'
     (Number . fst . head . readHex) <$> many1 hexDigit
+
+parseFloat :: Parser LispVal
+parseFloat = do
+    i <- many1 digit
+    p <- char '.'
+    d <- many1 digit
+    let fn = i ++ [p] ++ d
+    return $ (Float . read) fn
 
 parseExpr :: Parser LispVal
 parseExpr = parseNumber
