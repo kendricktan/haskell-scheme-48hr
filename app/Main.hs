@@ -2,6 +2,7 @@ module Main where
 
 import Numeric
 import Control.Monad
+import Data.Complex
 import System.Environment
 import Text.ParserCombinators.Parsec hiding (spaces)
 
@@ -12,6 +13,7 @@ data LispVal = Atom String
              | String String
              | Char Char
              | Float Float
+             | Complex (Complex Float)
              | Bool Bool deriving Show
 
 symbol :: Parser Char
@@ -53,10 +55,11 @@ parseChar = do
     return $ Char (head x)
 
 parseNumber :: Parser LispVal
-parseNumber = parseFloat
-          <|> parseHex
-          <|> parseOctal
-          <|> parseDecimal
+parseNumber = parseComplex
+          <|> try parseFloat
+          <|> try parseHex
+          <|> try parseOctal
+          <|> try parseDecimal
 
 parseDecimal :: Parser LispVal
 parseDecimal = (Number . read) <$> many1 digit
@@ -70,6 +73,17 @@ parseHex :: Parser LispVal
 parseHex = do
     char 'x'
     (Number . fst . head . readHex) <$> many1 hexDigit
+
+parseComplex :: Parser LispVal
+parseComplex = do
+    rn <- fmap toDouble (try parseFloat <|> parseDecimal)
+    char '+'
+    cn <- fmap toDouble (try parseFloat <|> parseDecimal)
+    char 'i'
+    return $ Complex (rn :+ cn)
+        where toDouble (Float x) = x
+              toDouble (Number x) = fromIntegral x
+
 
 parseFloat :: Parser LispVal
 parseFloat = do
