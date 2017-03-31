@@ -17,9 +17,9 @@ symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
 parseString :: Parser LispVal
 parseString = do
-    char '"'
+    char '\"'
     x <- many (escapedChars <|> noneOf "\"")
-    char '"'
+    char '\"'
     return $ String x
 
 escapedChars :: Parser Char
@@ -44,13 +44,25 @@ parseAtom = do
                _    -> Atom atom
 
 parseNumber :: Parser LispVal
-parseNumber = (Number . read) <$> many1 digit
+parseNumber = parseHex <|> parseOctal <|> parseDecimal
 
+parseDecimal :: Parser LispVal
+parseDecimal = (Number . read) <$> many1 digit
+
+parseOctal :: Parser LispVal
+parseOctal = do
+    char 'o'
+    (Number . fst . head . readOct) <$> many1 octDigit
+
+parseHex :: Parser LispVal
+parseHex = do
+    char 'x'
+    (Number . fst . head . readHex) <$> many1 hexDigit
 
 parseExpr :: Parser LispVal
-parseExpr = parseAtom
+parseExpr = parseNumber
     <|> parseString
-    <|> parseNumber
+    <|> parseAtom
 
 readExpr :: String -> String
 readExpr input = case parse parseExpr "lisp" input of
