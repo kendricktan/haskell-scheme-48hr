@@ -96,7 +96,26 @@ parseFloat = do
     return $ (Float . read) fn
 
 parseList :: Parser LispVal
-parseList = List <$> sepBy parseExpr spaces
+parseList = char '(' >> parseList1
+
+parseList1 :: Parser LispVal
+parseList1 = (char ')' >> (return . List) [])
+                <|> do
+                    expr <- parseExpr
+                    parseList2 [expr]
+
+parseList2 :: [LispVal] -> Parser LispVal
+parseList2 expr = (char ')' >> (return . List) (reverse expr))
+                <|> (spaces >> parseList3 expr)
+
+parseList3 :: [LispVal] -> Parser LispVal
+parseList3 expr = do char '.' >> spaces
+                     dotted <- parseExpr
+                     char ')'
+                     return $ DottedList expr dotted
+                  <|> do
+                      next <- parseExpr
+                      parseList2 (next:expr)
 
 parseDottedList :: Parser LispVal
 parseDottedList = do
