@@ -10,6 +10,7 @@ data LispVal = Atom String
              | DottedList [LispVal] LispVal
              | Number Integer
              | String String
+             | Char Char
              | Bool Bool deriving Show
 
 symbol :: Parser Char
@@ -43,6 +44,13 @@ parseAtom = do
                "#f" -> Bool False
                _    -> Atom atom
 
+parseChar :: Parser LispVal
+parseChar = do
+    char '\''
+    x <- count 1 anyChar
+    char '\''
+    return $ Char (head x)
+
 parseNumber :: Parser LispVal
 parseNumber = parseHex <|> parseOctal <|> parseDecimal
 
@@ -61,6 +69,7 @@ parseHex = do
 
 parseExpr :: Parser LispVal
 parseExpr = parseNumber
+    <|> parseChar
     <|> parseString
     <|> parseAtom
 
