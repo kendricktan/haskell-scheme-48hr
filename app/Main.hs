@@ -1,8 +1,11 @@
 module Main where
 
-import Numeric
-import Control.Monad
-import Data.Complex
+import Control.Monad (liftM)
+import Data.Array (Array (..), listArray)
+import Data.Char (toLower)
+import Data.Ratio (Rational (..), (%))
+import Data.Complex (Complex (..))
+import Numeric (readOct, readHex)
 import System.Environment
 import Text.ParserCombinators.Parsec hiding (spaces)
 
@@ -10,166 +13,288 @@ data LispVal = Atom String
              | List [LispVal]
              | DottedList [LispVal] LispVal
              | Number Integer
+             | Ratio Rational
+             | Float Double
+             | Complex (Complex Double)
              | String String
              | Char Char
-             | Float Float
-             | Complex (Complex Float)
-             | Bool Bool deriving Show
+             | Bool Bool
+             | Vector (Array Int LispVal)
 
-spaces :: Parser ()
-spaces = skipMany1 space
+instance Show LispVal where show = showVal
 
-symbol :: Parser Char
-symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
+main :: IO ()
+main = getArgs >>= print . eval . readExpr . head
 
-parseString :: Parser LispVal
-parseString = do
-    char '\"'
-    x <- many (escapedChars <|> noneOf "\"")
-    char '\"'
-    return $ String x
+readExpr :: String -> LispVal
+readExpr input = case parse parseExpr "lisp" input of
+         Left err -> String $ "No match: " ++ show err
+         Right val -> val
 
-escapedChars :: Parser Char
-escapedChars = do
-    char '\\'
-    c <- oneOf ['\\', '"', 'n', 'r', 't']
-    return $ case c of
-               '\\' -> c
-               '"'  -> c
-               'n'  -> '\n'
-               'r'  -> '\r'
-               't'  -> '\t'
+--
+-- LispVal Parsers
+--
+
+parseExpr :: Parser LispVal
+parseExpr = parseAtom
+          <|> parseString
+          <|> try parseChar
+          <|> try parseComplex
+          <|> try parseFloat
+          <|> try parseRatio
+          <|> try parseNumber
+          <|> parseBool
+          <|> parseQuoted
+          <|> parseQuasiquote
+          <|> try parseUnquoteSplicing
+          <|> parseUnquote
+          <|> parseList
 
 parseAtom :: Parser LispVal
-parseAtom = do
-    first <- letter <|> symbol
-    rest <- many (letter <|> digit <|> symbol)
-    let atom = first:rest
-    return $ case atom of
-               "#t" -> Bool True
-               "#f" -> Bool False
-               _    -> Atom atom
-
-parseChar :: Parser LispVal
-parseChar = do
-    char '\''
-    x <- count 1 anyChar
-    char '\''
-    return $ Char (head x)
-
-parseNumber :: Parser LispVal
-parseNumber = parseComplex
-          <|> try parseFloat
-          <|> try parseHex
-          <|> try parseOctal
-          <|> try parseDecimal
-
-parseDecimal :: Parser LispVal
-parseDecimal = (Number . read) <$> many1 digit
-
-parseOctal :: Parser LispVal
-parseOctal = do
-    char 'o'
-    (Number . fst . head . readOct) <$> many1 octDigit
-
-parseHex :: Parser LispVal
-parseHex = do
-    char 'x'
-    (Number . fst . head . readHex) <$> many1 hexDigit
-
-parseComplex :: Parser LispVal
-parseComplex = do
-    rn <- fmap toDouble (try parseFloat <|> parseDecimal)
-    char '+'
-    cn <- fmap toDouble (try parseFloat <|> parseDecimal)
-    char 'i'
-    return $ Complex (rn :+ cn)
-        where toDouble (Float x) = x
-              toDouble (Number x) = fromIntegral x
-
-parseFloat :: Parser LispVal
-parseFloat = do
-    i <- many1 digit
-    p <- char '.'
-    d <- many1 digit
-    let fn = i ++ [p] ++ d
-    return $ (Float . read) fn
+parseAtom = do first <- letter <|> symbol
+               rest <- many (letter <|> digit <|> symbol)
+               (return . Atom) (first:rest)
 
 parseList :: Parser LispVal
 parseList = char '(' >> parseList1
 
 parseList1 :: Parser LispVal
-parseList1 = (char ')' >> (return . List) [])
-                <|> do
-                    expr <- parseExpr
-                    parseList2 [expr]
+parseList1 = (char ')' >> (return . List) []) 
+               <|> do expr <- parseExpr
+                      parseList2 [expr]
 
 parseList2 :: [LispVal] -> Parser LispVal
-parseList2 expr = (char ')' >> (return . List) (reverse expr))
-                <|> (spaces >> parseList3 expr)
+parseList2 expr = (char ')' >> (return . List) (reverse expr)) 
+                    <|> (spaces >> parseList3 expr)
 
 parseList3 :: [LispVal] -> Parser LispVal
 parseList3 expr = do char '.' >> spaces
                      dotted <- parseExpr
                      char ')'
                      return $ DottedList expr dotted
-                  <|> do
-                      next <- parseExpr
-                      parseList2 (next:expr)
-
-parseDottedList :: Parser LispVal
-parseDottedList = do
-    head <- endBy parseExpr spaces
-    tail <- char '.' >> spaces >> parseExpr
-    return $ DottedList head tail
+                  <|> do next <- parseExpr
+                         parseList2 (next:expr)
 
 parseQuoted :: Parser LispVal
-parseQuoted = do
-    char '\''
-    x <- parseExpr
-    return $ List [Atom "quote", x]
+parseQuoted = do char '\''
+                 x <- parseExpr
+                 return $ List [Atom "quote", x]
 
-parseQuasiquoted :: Parser LispVal
-parseQuasiquoted = do
-    char '`'
-    x <- parseExpr
-    return $ List [Atom "quasiquote", x]
+parseNumber :: Parser LispVal
+parseNumber = parsePlainNumber <|> parseRadixNumber
 
-parseUnquoted :: Parser LispVal
-parseUnquoted = do
-    char ','
-    x <- parseExpr
-    return $ List [Atom "unquote", x]
+parsePlainNumber :: Parser LispVal
+parsePlainNumber = (Number . read) <$> many1 digit
 
+parseRadixNumber :: Parser LispVal
+parseRadixNumber = char '#' >> 
+                   (
+                        parseDecimal 
+                        <|> parseBinary
+                        <|> parseOctal
+                        <|> parseHex
+                   )
+
+parseDecimal :: Parser LispVal
+parseDecimal = do char 'd'
+                  n <- many1 digit
+                  (return . Number . read) n
+
+parseBinary :: Parser LispVal
+parseBinary = do char 'b'
+                 n <- many $ oneOf "01"
+                 (return . Number . bin2int) n
+
+parseOctal :: Parser LispVal
+parseOctal = do char 'o'
+                n <- many $ oneOf "01234567"
+                (return . Number . (readWith readOct)) n
+
+parseHex :: Parser LispVal
+parseHex = do char 'x'
+              n <- many $ oneOf "0123456789abcdefABCDEF"
+              (return . Number . (readWith readHex)) n
+
+parseRatio :: Parser LispVal
+parseRatio = do num <- fmap read $ many1 digit
+                char '/'
+                denom <- fmap read $ many1 digit
+                (return . Ratio) (num % denom)
+
+parseFloat :: Parser LispVal
+parseFloat = do whole <- many1 digit
+                char '.'
+                decimal <- many1 digit
+                return $ Float (read (whole++"."++decimal))
+
+parseComplex :: Parser LispVal
+parseComplex = do r <- fmap toDouble (try parseFloat <|> parsePlainNumber)
+                  char '+'
+                  i <- fmap toDouble (try parseFloat <|> parsePlainNumber)
+                  char 'i'
+                  (return . Complex) (r :+ i)
+               where toDouble (Float x) = x
+                     toDouble (Number x) = fromIntegral x
+
+parseString :: Parser LispVal
+parseString = do char '"'
+                 s <- many (escapedChars <|> (noneOf ['\\', '"']))
+                 char '"'
+                 (return . String) s
+
+parseChar :: Parser LispVal
+parseChar = do string "#\\"
+               s <- many1 letter
+               return $ case (map toLower s) of
+                      "space" -> Char ' '
+                      "newline" -> Char '\n'
+                      [x] -> Char x
+
+parseBool :: Parser LispVal
+parseBool = do char '#'
+               c <- oneOf "tf"
+               return $ case c of
+                      't' -> Bool True
+                      'f' -> Bool False
+
+parseQuasiquote :: Parser LispVal
+parseQuasiquote = do char '`'
+                     expr <- parseExpr
+                     return $ List [Atom "quasiquote", expr]
+
+-- Bug: this allows the unquote to appear outside of a quasiquoted list
+parseUnquote :: Parser LispVal
+parseUnquote = do char ','
+                  expr <- parseExpr
+                  return $ List [Atom "unquote", expr]
+
+-- Bug: this allows unquote-splicing to appear outside of a quasiquoted list
 parseUnquoteSplicing :: Parser LispVal
-parseUnquoteSplicing = do
-    string ",@"
-    x <- parseExpr
-    return $ List [Atom "unquote-splicing", x]
+parseUnquoteSplicing = do string ",@"
+                          expr <- parseExpr
+                          return $ List [Atom "unquote-splicing", expr]
 
-parseQuotes :: Parser LispVal
-parseQuotes = try parseQuoted
-          <|> try parseQuasiquoted
-          <|> try parseUnquoted
-          <|> try parseUnquoteSplicing
+parseVector :: Parser LispVal
+parseVector = do string "#("
+                 elems <- sepBy parseExpr spaces
+                 char ')'
+                 return $ Vector (listArray (0, (length elems)-1) elems)
 
-parseExpr :: Parser LispVal
-parseExpr = try parseAtom
-    <|> try parseString
-    <|> try parseChar
-    <|> try parseQuotes
-    <|> try parseNumber
-    <|> do char '('
-           x <- try parseList <|> parseDottedList
-           char ')'
-           return x
+--
+-- Show functions
+--
 
-readExpr :: String -> String
-readExpr input = case parse parseExpr "lisp" input of
-    Left err -> "No match: " ++ show err
-    Right val -> "Found value: " ++ show val
+showVal :: LispVal -> String
+showVal (String s) = "\"" ++ s ++ "\""
+showVal (Atom name) = name
+showVal (Number n) = show n
+showVal (Bool True) = "#t"
+showVal (Bool False) = "#f"
+showVal (List xs) = "(" ++ unwordsList xs ++ ")"
+showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tail ++ ")"
 
-main :: IO ()
-main = do
-    (expr:_) <- getArgs
-    putStrLn (readExpr expr)
+--
+-- Evaluator
+--
+
+eval :: LispVal -> LispVal
+eval val@(String _) = val
+eval val@(Number _) = val
+eval val@(Bool _) = val
+eval (List [Atom "quote", val]) = val
+eval (List (Atom func : args)) = apply func $ map eval args
+
+--
+-- Primitive functions lookup table
+--
+primitives :: [(String, [LispVal] -> LispVal)]
+primitives = [("+", numericBinop (+)),
+              ("-", numericBinop (-)),
+              ("*", numericBinop (*)),
+              ("/", numericBinop div),
+              ("mod", numericBinop mod),
+              ("quotient", numericBinop quot),
+              ("remainder", numericBinop rem),
+              ("not", unaryOp not'),
+              ("boolean?", unaryOp boolP),
+              ("list?", unaryOp listP),
+              ("symbol?", unaryOp symbolP),
+              ("char?", unaryOp charP),
+              ("string?", unaryOp stringP),
+              ("string2symbol", unaryOp string2symbol),
+              ("symbol2string?", unaryOp symbol2string)
+            ]
+
+
+-- Unary primitive defs all have type
+-- LispVal -> LispVal
+
+unaryOp :: (LispVal -> LispVal) -> [LispVal] -> LispVal
+unaryOp f [arg] = f arg
+
+not' (Bool x) = (Bool . not) x
+not' _ = Bool False
+
+boolP (Bool _) = Bool True
+boolP _ = Bool False
+
+listP (List _) = Bool True
+listP (DottedList _ _) = Bool True
+listP _ = Bool False
+
+symbolP (Atom _) = Bool True
+symbolP _ = Bool False
+
+charP (Char _) = Bool True
+charP _ = Bool False
+
+stringP (String _) = Bool True
+stringP _ = Bool False
+
+symbol2string (Atom s) = String s
+symbol2string _ = error "Expecting an atom"
+
+string2symbol (String s) = Atom s
+string2symbol _ = error "Expecting a string"
+
+--
+-- Helpers
+--
+
+escapedChars :: Parser Char
+escapedChars = do
+             char '\\'
+             c <- oneOf ['\\','"', 'n', 'r', 't']
+             return $ case c of
+                    '\\' -> c
+                    '"'  -> c
+                    'n'  -> '\n'
+                    'r'  -> '\r'
+                    't'  -> '\t'
+
+symbol :: Parser Char
+symbol = oneOf "!$%&|*+-/:<=>?@^_~"
+
+spaces :: Parser ()
+spaces = skipMany1 space
+bin2int :: String -> Integer
+bin2int s = sum $ map (\(i,x) -> i*(2^x)) $ zip [0..] $ map p (reverse s)
+          where p '0' = 0
+                p '1' = 1
+
+readWith :: (t -> [(a, b)]) -> t -> a
+readWith f s = fst $ f s !! 0
+
+unwordsList :: [LispVal] -> String
+unwordsList = unwords . map showVal
+
+apply :: String -> [LispVal] -> LispVal
+apply func args = maybe (Bool False) ($ args) $ lookup func primitives
+
+numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
+numericBinop op params = Number $ foldl1 op $ map unpackNum params
+
+unpackNum :: LispVal -> Integer
+unpackNum (Number n) = n
+unpackNum (List [n]) = unpackNum n
+unpackNum _ = 0
